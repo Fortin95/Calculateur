@@ -300,9 +300,61 @@
                 padding: 0;
             }
         }
+        /* Loading spinner */
+        .loading-spinner-container {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .loading-spinner {
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        /* Pagination pour les chantiers */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .pagination button {
+            margin: 0 5px;
+            padding: 5px 10px;
+        }
+        .status-message {
+            color: #2ecc71;
+            text-align: center;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .error-message {
+            color: #e74c3c;
+            text-align: center;
+            margin: 10px 0;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
+    <!-- Loading Spinner -->
+    <div class="loading-spinner-container" id="loadingSpinner">
+        <div class="loading-spinner"></div>
+    </div>
+
     <div class="container">
         <h1>Calculateur de Dispatch avec Gestion des Chauffeurs</h1>
         
@@ -311,6 +363,9 @@
             <button class="tablink" onclick="openTab(event, 'jobDispatch')">Vue du Dispatch</button>
             <button class="tablink" onclick="openTab(event, 'driversSchedule')">Horaire des Chauffeurs</button>
         </div>
+
+        <div id="statusMessage" class="status-message"></div>
+        <div id="errorMessage" class="error-message"></div>
         
         <!-- Onglet Chantiers du Jour -->
         <div id="dailyJobs" class="tabcontent show">
@@ -336,6 +391,11 @@
                 </tbody>
             </table>
             
+            <!-- Pagination pour les chantiers -->
+            <div class="pagination" id="jobsPagination">
+                <!-- Les boutons de pagination seront ajoutés ici dynamiquement -->
+            </div>
+            
             <button class="add-row-btn" onclick="addRow()">Ajouter un Chantier</button>
             
             <div style="margin-top: 20px;">
@@ -343,7 +403,10 @@
                 <div id="dailySummary">
                     <!-- Le résumé sera affiché ici -->
                 </div>
-                <button id="generateScheduleBtn" onclick="generateDriversSchedule()" style="margin-top: 20px;">Générer l'Horaire des Chauffeurs</button>
+                <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+                    <button id="syncAllJobsBtn" onclick="syncAllJobs()" style="background-color: #27ae60;">Calculer le Dispatch de Tous les Chantiers</button>
+                    <button id="generateScheduleBtn" onclick="generateDriversSchedule()">Générer l'Horaire des Chauffeurs</button>
+                </div>
             </div>
         </div>
         
@@ -450,6 +513,8 @@
         // Variables globales
         let jobs = [];
         let driverAssignments = [];  // Contient les assignations des chauffeurs
+        let currentJobPage = 1;
+        const jobsPerPage = 10; // Nombre de chantiers par page
         
         // Liste des chauffeurs par ordre d'ancienneté
         const drivers = [
@@ -472,6 +537,11 @@
             // Ajouter une ligne vide si aucun chantier
             if (jobs.length === 0) {
                 addRow();
+            } else {
+                // Mettre à jour la pagination
+                updateJobsPagination();
+                // Afficher la première page
+                displayJobsPage(1);
             }
             
             // Initialiser le calcul de dispatch
@@ -479,6 +549,35 @@
                 calculateDispatch();
             });
         });
+        
+        // Afficher/masquer le spinner de chargement
+        function showLoading(show = true) {
+            document.getElementById('loadingSpinner').style.display = show ? 'flex' : 'none';
+        }
+        
+        // Afficher un message de statut
+        function showStatusMessage(message, duration = 3000) {
+            const statusElement = document.getElementById('statusMessage');
+            statusElement.textContent = message;
+            statusElement.style.display = 'block';
+            
+            setTimeout(() => {
+                statusElement.textContent = '';
+                statusElement.style.display = 'none';
+            }, duration);
+        }
+        
+        // Afficher un message d'erreur
+        function showErrorMessage(message, duration = 5000) {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+            
+            setTimeout(() => {
+                errorElement.textContent = '';
+                errorElement.style.display = 'none';
+            }, duration);
+        }
         
         // Fonction pour ouvrir un onglet
         function openTab(evt, tabName) {
@@ -517,6 +616,13 @@
                 </td>
             `;
             tbody.appendChild(newRow);
+            
+            // Si c'est un nouveau chantier (pas un chargement initial),
+            // on met à jour la pagination et on va à la dernière page
+            if (jobs.length > 0) {
+                updateJobsPagination();
+                displayJobsPage(Math.ceil(jobs.length / jobsPerPage));
+            }
         }
         
         // Fonction pour supprimer une ligne
@@ -532,6 +638,16 @@
             
             row.remove();
             updateDailySummary();
+            
+            // Mettre à jour la pagination
+            updateJobsPagination();
+            
+            // Si la page actuelle n'a plus de chantiers et ce n'est pas la première page,
+            // aller à la page précédente
+            const tbody = document.querySelector('#jobsTable tbody');
+            if (tbody.children.length === 0 && currentJobPage > 1) {
+                displayJobsPage(currentJobPage - 1);
+            }
         }
         
         // Fonction pour effacer tous les chantiers
@@ -550,7 +666,110 @@
                 
                 // Mettre à jour le résumé
                 updateDailySummary();
+                
+                // Réinitialiser la pagination
+                currentJobPage = 1;
+                updateJobsPagination();
             }
+        }
+        
+        // Fonction pour mettre à jour la pagination des chantiers
+        function updateJobsPagination() {
+            const paginationContainer = document.getElementById('jobsPagination');
+            paginationContainer.innerHTML = '';
+            
+            // Si moins de chantiers que la limite par page, cacher la pagination
+            if (jobs.length <= jobsPerPage) {
+                paginationContainer.style.display = 'none';
+                return;
+            }
+            
+            paginationContainer.style.display = 'flex';
+            
+            // Calculer le nombre de pages
+            const pageCount = Math.ceil(jobs.length / jobsPerPage);
+            
+            // Bouton précédent
+            const prevButton = document.createElement('button');
+            prevButton.textContent = '«';
+            prevButton.onclick = () => {
+                if (currentJobPage > 1) {
+                    displayJobsPage(currentJobPage - 1);
+                }
+            };
+            prevButton.disabled = currentJobPage === 1;
+            paginationContainer.appendChild(prevButton);
+            
+            // Limiter le nombre de boutons de page affichés
+            const maxVisibleButtons = 5;
+            let startPage = Math.max(1, currentJobPage - Math.floor(maxVisibleButtons / 2));
+            let endPage = Math.min(pageCount, startPage + maxVisibleButtons - 1);
+            
+            // Ajuster si on est près de la fin
+            if (endPage - startPage + 1 < maxVisibleButtons) {
+                startPage = Math.max(1, endPage - maxVisibleButtons + 1);
+            }
+            
+            // Boutons de page
+            for (let i = startPage; i <= endPage; i++) {
+                const pageButton = document.createElement('button');
+                pageButton.textContent = i;
+                pageButton.onclick = () => displayJobsPage(i);
+                
+                if (i === currentJobPage) {
+                    pageButton.style.backgroundColor = '#2c3e50';
+                    pageButton.style.color = 'white';
+                }
+                
+                paginationContainer.appendChild(pageButton);
+            }
+            
+            // Bouton suivant
+            const nextButton = document.createElement('button');
+            nextButton.textContent = '»';
+            nextButton.onclick = () => {
+                if (currentJobPage < pageCount) {
+                    displayJobsPage(currentJobPage + 1);
+                }
+            };
+            nextButton.disabled = currentJobPage === pageCount;
+            paginationContainer.appendChild(nextButton);
+        }
+        
+        // Fonction pour afficher une page de chantiers
+        function displayJobsPage(pageNumber) {
+            currentJobPage = pageNumber;
+            
+            const tbody = document.querySelector('#jobsTable tbody');
+            tbody.innerHTML = '';
+            
+            // Calculer les indices de début et de fin pour cette page
+            const startIndex = (pageNumber - 1) * jobsPerPage;
+            const endIndex = Math.min(startIndex + jobsPerPage, jobs.length);
+            
+            // Afficher les chantiers de cette page
+            for (let i = startIndex; i < endIndex; i++) {
+                const job = jobs[i];
+                const newRow = document.createElement('tr');
+                newRow.setAttribute('data-job-id', job.id);
+                
+                newRow.innerHTML = `
+                    <td><input type="text" class="client-name" value="${job.name || ''}" placeholder="Nom du client"></td>
+                    <td><input type="text" class="company-name" value="${job.company || ''}" placeholder="Nom de l'entreprise"></td>
+                    <td><input type="time" class="work-time" value="${job.workTime || ''}"></td>
+                    <td><input type="number" class="meter-needed" min="0" step="0.5" value="${job.meterNeeded || ''}" placeholder="m³"></td>
+                    <td><input type="number" class="travel-time" min="0" value="${job.travelTime || ''}" placeholder="minutes"></td>
+                    <td>
+                        <button class="view-dispatch-btn" onclick="viewDispatch(this)">Voir Dispatch</button>
+                        <button class="delete-btn" onclick="deleteRow(this)">X</button>
+                    </td>
+                `;
+                
+                tbody.appendChild(newRow);
+            }
+            
+            // Mettre à jour la pagination
+            updateJobsPagination();
         }
         
         // Fonction pour voir le dispatch d'un chantier
@@ -568,7 +787,7 @@
             
             // Validation des données
             if (!jobData.name || !jobData.workTime || !jobData.meterNeeded || !jobData.travelTime) {
-                alert("Veuillez remplir tous les champs obligatoires (client, heure, volume et temps de trajet).");
+                showErrorMessage("Veuillez remplir tous les champs obligatoires (client, heure, volume et temps de trajet).");
                 return;
             }
             
@@ -599,7 +818,161 @@
             document.querySelector('.tablink[onclick*="jobDispatch"]').click();
         }
         
-        // Fonction pour calculer le dispatch pour un chantier
+        // Fonction pour synchroniser tous les chantiers (calculer le dispatch pour chaque chantier)
+        function syncAllJobs() {
+            showLoading(true);
+            
+            // Message initial
+            showStatusMessage("Démarrage du calcul pour tous les chantiers...");
+            
+            // Vérifier qu'il y a des chantiers
+            if (jobs.length === 0) {
+                showErrorMessage("Aucun chantier n'a été ajouté.");
+                showLoading(false);
+                return;
+            }
+            
+            // Filtrer les chantiers valides (qui ont toutes les données nécessaires)
+            const validJobs = jobs.filter(job => 
+                job && job.name && job.workTime && 
+                job.meterNeeded && job.travelTime
+            );
+            
+            if (validJobs.length === 0) {
+                showErrorMessage("Aucun chantier valide trouvé. Assurez-vous que tous les champs sont remplis.");
+                showLoading(false);
+                return;
+            }
+            
+            // Message pour indiquer le nombre de chantiers à traiter
+            showStatusMessage(`Calcul en cours pour ${validJobs.length} chantiers...`);
+            
+            // Traiter les chantiers par lots pour ne pas bloquer l'interface
+            const batchSize = 5; // Traiter 5 chantiers à la fois
+            let processedCount = 0;
+            
+            function processBatch(startIndex) {
+                // Calculer l'indice de fin pour cette batch
+                const endIndex = Math.min(startIndex + batchSize, validJobs.length);
+                
+                // Traiter chaque chantier de cette batch
+                for (let i = startIndex; i < endIndex; i++) {
+                    try {
+                        const job = validJobs[i];
+                        
+                        // Mettre à jour le message de statut
+                        showStatusMessage(`Calcul en cours pour le chantier ${i+1}/${validJobs.length}: ${job.name}`);
+                        
+                        // Calculer le dispatch pour ce chantier
+                        calculateJobDispatch(job);
+                        
+                        // Incrémenter le compteur de chantiers traités
+                        processedCount++;
+                    } catch (error) {
+                        console.error(`Erreur lors du calcul du dispatch pour le chantier ${i}:`, error);
+                    }
+                }
+                
+                // Si tous les chantiers ont été traités, terminer le processus
+                if (endIndex >= validJobs.length) {
+                    // Sauvegarder tous les chantiers
+                    saveJobs();
+                    
+                    // Mettre à jour le résumé
+                    updateDailySummary();
+                    
+                    // Afficher un message de succès
+                    showStatusMessage(`Calcul terminé pour ${processedCount} chantiers sur ${validJobs.length}.`);
+                    
+                    // Masquer le spinner de chargement
+                    showLoading(false);
+                } else {
+                    // Il reste des chantiers à traiter, continuer avec la prochaine batch
+                    setTimeout(() => {
+                        processBatch(endIndex);
+                    }, 50); // Petit délai pour permettre à l'interface de se mettre à jour
+                }
+            }
+            
+            // Démarrer le traitement avec la première batch
+            setTimeout(() => {
+                processBatch(0);
+            }, 100);
+        }
+        
+        // Fonction pour calculer le dispatch pour un chantier spécifique
+        function calculateJobDispatch(job) {
+            // Paramètres par défaut
+            const arrivalTime = job.workTime;
+            const cementQuantity = parseFloat(job.meterNeeded);
+            const travelTime = parseInt(job.travelTime);
+            const truckCapacity = 8; // Valeur par défaut
+            const loadingTime = 15; // Valeur par défaut
+            const unloadingTime = 30; // Valeur par défaut
+            const truckInterval = 15; // Valeur par défaut
+            
+            // Calculer le nombre de camions nécessaires
+            const truckCount = Math.ceil(cementQuantity / truckCapacity);
+            
+            // Calculer le temps d'aller-retour
+            const roundTripMinutes = travelTime * 2 + unloadingTime;
+            
+            // Calculer l'heure du premier chargement
+            const arrivalTimeParts = arrivalTime.split(':').map(part => parseInt(part));
+            let loadingTimeMinutes = arrivalTimeParts[0] * 60 + arrivalTimeParts[1] - travelTime - loadingTime - 5;
+            if (loadingTimeMinutes < 0) loadingTimeMinutes += 24 * 60; // Traiter le passage à la journée précédente
+            
+            // Créer un tableau de dispatch pour ce chantier
+            const truckDetails = [];
+            for (let i = 0; i < truckCount; i++) {
+                const truckLoadingMinutes = loadingTimeMinutes + (i * truckInterval);
+                const truckArrivalMinutes = truckLoadingMinutes + loadingTime + travelTime;
+                const truckDepartureMinutes = truckArrivalMinutes + unloadingTime;
+                const truckReturnMinutes = truckDepartureMinutes + travelTime;
+                
+                // Calculer l'heure d'arrivée du chauffeur (15 minutes avant le chargement)
+                const driverArrivalMinutes = truckLoadingMinutes - 15;
+                
+                const truckVolume = i === truckCount - 1 
+                    ? cementQuantity - (truckCount - 1) * truckCapacity 
+                    : truckCapacity;
+                
+                truckDetails.push({
+                    truckNumber: i + 1,
+                    jobId: job.id,
+                    jobName: job.name,
+                    company: job.company,
+                    volume: truckVolume,
+                    driverArrivalMinutes: driverArrivalMinutes,
+                    loadingTimeMinutes: truckLoadingMinutes,
+                    arrivalTimeMinutes: truckArrivalMinutes,
+                    departureTimeMinutes: truckDepartureMinutes,
+                    returnTimeMinutes: truckReturnMinutes,
+                    driverArrivalTime: minutesToTimeString(driverArrivalMinutes),
+                    loadingTime: minutesToTimeString(truckLoadingMinutes),
+                    arrivalTime: minutesToTimeString(truckArrivalMinutes),
+                    departureTime: minutesToTimeString(truckDepartureMinutes),
+                    returnTime: minutesToTimeString(truckReturnMinutes),
+                    travelTime: travelTime,
+                    loadingDuration: loadingTime,
+                    unloadingDuration: unloadingTime
+                });
+            }
+            
+            // Mettre à jour le chantier avec les données calculées
+            job.dispatch = truckDetails;
+            job.calculatedData = {
+                truckCapacity,
+                loadingTime,
+                unloadingTime,
+                truckInterval,
+                totalTrucks: truckCount
+            };
+            
+            return job;
+        }
+        
+        // Fonction pour calculer le dispatch depuis l'interface utilisateur
         function calculateDispatch() {
             // Get input values
             const arrivalTime = document.getElementById('arrivalTime').value;
@@ -787,525 +1160,10 @@
                     totalTrucks: truckCount
                 };
                 
+                // Afficher un message de succès
+                showStatusMessage(`Dispatch calculé avec succès pour ${currentJob.name}.`);
+                
                 // Sauvegarder les modifications
                 saveJobs();
             }
         }
-        
-        // Fonction pour générer l'horaire des chauffeurs
-        function generateDriversSchedule() {
-            // Vérifier qu'il y a des chantiers
-            if (jobs.length === 0) {
-                alert("Aucun chantier n'a été ajouté. Veuillez d'abord ajouter des chantiers et calculer leur dispatch.");
-                return;
-            }
-            
-            // Vérifier que tous les chantiers ont des calculs de dispatch
-            const jobsWithoutDispatch = jobs.filter(job => !job.dispatch || job.dispatch.length === 0);
-            if (jobsWithoutDispatch.length > 0) {
-                const jobNames = jobsWithoutDispatch.map(job => `${job.name} (${job.company})`).join(", ");
-                alert(`Les chantiers suivants n'ont pas de calcul de dispatch : ${jobNames}.\nVeuillez d'abord calculer leur dispatch.`);
-                return;
-            }
-            
-            // Collecter tous les camions de tous les chantiers dans une seule liste
-            const allTrucks = [];
-            jobs.forEach(job => {
-                job.dispatch.forEach(truck => {
-                    allTrucks.push({
-                        ...truck,
-                        jobId: job.id,
-                        jobName: job.name,
-                        company: job.company
-                    });
-                });
-            });
-            
-            // Trier les camions par heure de chargement
-            allTrucks.sort((a, b) => a.loadingTimeMinutes - b.loadingTimeMinutes);
-            
-            // Réinitialiser les assignations de chauffeurs
-            driverAssignments = [];
-            
-            // Assigner les chauffeurs aux camions en respectant l'ordre d'ancienneté
-            assignDrivers(allTrucks);
-            
-            // Afficher l'horaire des chauffeurs
-            displayDriversSchedule();
-            
-            // Basculer vers l'onglet de l'horaire des chauffeurs
-            document.querySelector('.tablink[onclick*="driversSchedule"]').click();
-        }
-        
-        // Fonction pour assigner les chauffeurs aux camions selon l'ordre d'ancienneté
-        function assignDrivers(trucks) {
-            // Créer un objet pour suivre la disponibilité de chaque chauffeur
-            const driverAvailability = {};
-            const driverFirstJob = {}; // Pour suivre le premier job de chaque chauffeur
-            
-            drivers.forEach(driver => {
-                driverAvailability[driver] = 0; // Disponible dès 0 minutes (début de journée)
-                driverFirstJob[driver] = null;
-            });
-            
-            // Pour chaque camion, trouver le chauffeur le plus ancien disponible
-            trucks.forEach(truck => {
-                // Trouver le chauffeur disponible le plus ancien
-                let assignedDriver = null;
-                
-                // Parcourir les chauffeurs par ordre d'ancienneté
-                for (const driver of drivers) {
-                    // Vérifier si le chauffeur est disponible pour ce camion
-                    if (driverAvailability[driver] <= truck.driverArrivalMinutes) {
-                        assignedDriver = driver;
-                        break;
-                    }
-                }
-                
-                // Si aucun chauffeur n'est disponible (cas rare mais possible), prendre le premier qui sera disponible
-                if (!assignedDriver) {
-                    // Trouver le chauffeur qui sera disponible le plus tôt
-                    let earliestAvailableTime = Infinity;
-                    drivers.forEach(driver => {
-                        if (driverAvailability[driver] < earliestAvailableTime) {
-                            earliestAvailableTime = driverAvailability[driver];
-                            assignedDriver = driver;
-                        }
-                    });
-                }
-                
-                // Si c'est le premier job du chauffeur, arrondir l'heure d'arrivée aux 15 minutes inférieures
-                if (driverFirstJob[assignedDriver] === null) {
-                    // Arrondir l'heure d'arrivée aux 15 minutes inférieures
-                    truck.driverArrivalMinutes = roundDownToQuarterHour(truck.driverArrivalMinutes);
-                    truck.driverArrivalTime = minutesToTimeString(truck.driverArrivalMinutes);
-                    driverFirstJob[assignedDriver] = truck;
-                }
-                
-                // Mettre à jour la disponibilité du chauffeur assigné
-                driverAvailability[assignedDriver] = truck.returnTimeMinutes;
-                
-                // Ajouter cette assignation à la liste
-                driverAssignments.push({
-                    driver: assignedDriver,
-                    truck: truck,
-                    isFirstJob: driverFirstJob[assignedDriver] === truck
-                });
-            });
-        }
-        
-        // Fonction pour afficher l'horaire des chauffeurs
-        function displayDriversSchedule() {
-            const container = document.getElementById('driversContainer');
-            container.innerHTML = '';
-            
-            // Grouper les assignations par chauffeur
-            const driverJobs = {};
-            drivers.forEach(driver => {
-                driverJobs[driver] = [];
-            });
-            
-            driverAssignments.forEach(assignment => {
-                driverJobs[assignment.driver].push(assignment.truck);
-            });
-            
-            // Créer un résumé des heures d'arrivée des chauffeurs
-            displayDriversSummary(driverJobs);
-            
-            // Créer une carte pour chaque chauffeur
-            drivers.forEach(driver => {
-                const driverCard = document.createElement('div');
-                driverCard.className = 'driver-card';
-                
-                // Déterminer l'heure d'arrivée du chauffeur (15 minutes avant son premier chargement)
-                let driverFirstJob = null;
-                if (driverJobs[driver].length > 0) {
-                    // Trier les camions par heure de chargement
-                    driverJobs[driver].sort((a, b) => a.loadingTimeMinutes - b.loadingTimeMinutes);
-                    driverFirstJob = driverJobs[driver][0];
-                }
-                
-                // En-tête avec le nom du chauffeur et l'heure d'arrivée
-                const header = document.createElement('div');
-                header.className = 'driver-header';
-                
-                const driverName = document.createElement('span');
-                driverName.textContent = driver;
-                header.appendChild(driverName);
-                
-                if (driverFirstJob) {
-                    const arrivalTime = document.createElement('span');
-                    arrivalTime.className = 'driver-arrival-time';
-                    arrivalTime.textContent = `Arrivée: ${driverFirstJob.driverArrivalTime}`;
-                    header.appendChild(arrivalTime);
-                }
-                
-                driverCard.appendChild(header);
-                
-                // Liste des camions assignés au chauffeur
-                const jobsList = document.createElement('div');
-                jobsList.className = 'driver-schedule';
-                
-                if (driverJobs[driver].length === 0) {
-                    jobsList.innerHTML = '<p class="no-jobs">Aucun camion assigné</p>';
-                } else {
-                    // Créer une table pour les camions
-                    const table = document.createElement('table');
-                    table.style.width = '100%';
-                    
-                    // En-tête de la table
-                    const thead = document.createElement('thead');
-                    thead.innerHTML = `
-                        <tr>
-                            <th>Camion</th>
-                            <th>Client</th>
-                            <th>Volume</th>
-                            <th>Arrivée Chauffeur</th>
-                            <th>Chargement</th>
-                            <th>Arrivée Chantier</th>
-                            <th>Départ</th>
-                            <th>Retour</th>
-                        </tr>
-                    `;
-                    table.appendChild(thead);
-                    
-                    // Corps de la table
-                    const tbody = document.createElement('tbody');
-                    driverJobs[driver].forEach((truck, index) => {
-                        const row = document.createElement('tr');
-                        
-                        // Si c'est le premier camion du chauffeur, on met en gras l'heure d'arrivée
-                        const isFirstTruck = index === 0;
-                        
-                        row.innerHTML = `
-                            <td>Camion ${truck.truckNumber}</td>
-                            <td>${truck.jobName}</td>
-                            <td>${truck.volume} m³</td>
-                            <td>${isFirstTruck ? '<strong style="color:#e74c3c;">' + truck.driverArrivalTime + '</strong>' : truck.driverArrivalTime}</td>
-                            <td>${truck.loadingTime}</td>
-                            <td>${truck.arrivalTime}</td>
-                            <td>${truck.departureTime}</td>
-                            <td>${truck.returnTime}</td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-                    table.appendChild(tbody);
-                    
-                    jobsList.appendChild(table);
-                }
-                
-                driverCard.appendChild(jobsList);
-                container.appendChild(driverCard);
-            });
-            
-            // Créer la chronologie des camions
-            createTimeline();
-        }
-        
-        // Fonction pour afficher le résumé des heures d'arrivée des chauffeurs
-        function displayDriversSummary(driverJobs) {
-            const container = document.getElementById('driversSummary');
-            container.innerHTML = '';
-            
-            // Créer un titre
-            const title = document.createElement('h3');
-            title.textContent = 'Heures d\'arrivée des chauffeurs';
-            container.appendChild(title);
-            
-            // Créer une table pour le résumé
-            const table = document.createElement('table');
-            table.className = 'summary-table';
-            
-            // En-tête de la table
-            const thead = document.createElement('thead');
-            thead.innerHTML = `
-                <tr>
-                    <th>Chauffeur</th>
-                    <th>Heure d'arrivée</th>
-                    <th>Premier client</th>
-                    <th>Dernier retour</th>
-                </tr>
-            `;
-            table.appendChild(thead);
-            
-            // Corps de la table
-            const tbody = document.createElement('tbody');
-            
-            drivers.forEach(driver => {
-                if (driverJobs[driver].length > 0) {
-                    // Trier les camions par heure de chargement
-                    driverJobs[driver].sort((a, b) => a.loadingTimeMinutes - b.loadingTimeMinutes);
-                    
-                    const firstJob = driverJobs[driver][0];
-                    const lastJob = driverJobs[driver][driverJobs[driver].length - 1];
-                    
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td><strong>${driver}</strong></td>
-                        <td><strong>${firstJob.driverArrivalTime}</strong></td>
-                        <td>${firstJob.jobName}</td>
-                        <td>${lastJob.returnTime}</td>
-                    `;
-                    tbody.appendChild(row);
-                } else {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td><strong>${driver}</strong></td>
-                        <td colspan="3" class="no-jobs">Aucun camion assigné</td>
-                    `;
-                    tbody.appendChild(row);
-                }
-            });
-            
-            table.appendChild(tbody);
-            container.appendChild(table);
-        }
-        
-        // Fonction pour créer la chronologie des camions
-        function createTimeline() {
-            const container = document.getElementById('timelineContainer');
-            container.innerHTML = '';
-            
-            // Déterminer la plage horaire à afficher
-            let earliestTime = Infinity;
-            let latestTime = 0;
-            
-            driverAssignments.forEach(assignment => {
-                const truck = assignment.truck;
-                earliestTime = Math.min(earliestTime, truck.driverArrivalMinutes);
-                latestTime = Math.max(latestTime, truck.returnTimeMinutes);
-            });
-            
-            // Arrondir pour avoir des heures pleines
-            earliestTime = Math.floor(earliestTime / 60) * 60;
-            latestTime = Math.ceil(latestTime / 60) * 60;
-            
-            // Créer les heures de la chronologie
-            const timeline = document.createElement('div');
-            timeline.className = 'timeline';
-            
-            // En-tête avec les heures
-            const timelineHeader = document.createElement('div');
-            timelineHeader.className = 'timeline-header';
-            
-            for (let time = earliestTime; time <= latestTime; time += 60) {
-                const hour = document.createElement('div');
-                hour.className = 'timeline-hour';
-                hour.textContent = `${Math.floor(time / 60)}:00`;
-                timelineHeader.appendChild(hour);
-            }
-            
-            timeline.appendChild(timelineHeader);
-            
-            // Créer une ligne par chauffeur
-            drivers.forEach(driver => {
-                const assignments = driverAssignments
-                    .filter(a => a.driver === driver)
-                    .sort((a, b) => a.truck.loadingTimeMinutes - b.truck.loadingTimeMinutes);
-                
-                if (assignments.length > 0) {
-                    const timelineRow = document.createElement('div');
-                    timelineRow.className = 'timeline-row';
-                    
-                    const label = document.createElement('div');
-                    label.className = 'timeline-label';
-                    label.textContent = driver;
-                    timelineRow.appendChild(label);
-                    
-                    const content = document.createElement('div');
-                    content.className = 'timeline-content';
-                    
-                    // Calculer la largeur d'une heure en pourcentage
-                    const timeSpan = latestTime - earliestTime;
-                    const hourWidth = 100 / (timeSpan / 60);
-                    
-                    // Trouver le premier camion de ce chauffeur pour marquer le début du quart
-                    const firstAssignment = assignments.find(a => a.isFirstJob);
-                    
-                    if (firstAssignment) {
-                        // Marquer l'heure d'arrivée du chauffeur seulement pour son premier camion
-                        const arrivalMarker = document.createElement('div');
-                        arrivalMarker.className = 'arrival-marker';
-                        const arrivalPosition = (firstAssignment.truck.driverArrivalMinutes - earliestTime) / timeSpan * 100;
-                        arrivalMarker.style.left = `${arrivalPosition}%`;
-                        
-                        const arrivalLabel = document.createElement('div');
-                        arrivalLabel.className = 'arrival-label';
-                        arrivalLabel.textContent = firstAssignment.truck.driverArrivalTime;
-                        arrivalLabel.style.left = `${arrivalPosition}%`;
-                        arrivalLabel.style.top = '-15px';
-                        
-                        content.appendChild(arrivalMarker);
-                        content.appendChild(arrivalLabel);
-                    }
-                    
-                    // Ajouter chaque camion sur la chronologie
-                    assignments.forEach(assignment => {
-                        const truck = assignment.truck;
-                        
-                        // Phases du camion : chargement, trajet aller, déchargement, trajet retour
-                        
-                        // 1. Chargement
-                        const loadingBar = document.createElement('div');
-                        loadingBar.className = 'timeline-bar loading-bar';
-                        const loadingStart = (truck.loadingTimeMinutes - earliestTime) / timeSpan * 100;
-                        const loadingWidth = truck.loadingDuration / timeSpan * 100;
-                        loadingBar.style.left = `${loadingStart}%`;
-                        loadingBar.style.width = `${loadingWidth}%`;
-                        loadingBar.textContent = `C${truck.truckNumber} - ${truck.jobName}`;
-                        content.appendChild(loadingBar);
-                        
-                        // 2. Trajet aller
-                        const travelBar = document.createElement('div');
-                        travelBar.className = 'timeline-bar travel-bar';
-                        const travelStart = (truck.loadingTimeMinutes + truck.loadingDuration - earliestTime) / timeSpan * 100;
-                        const travelWidth = truck.travelTime / timeSpan * 100;
-                        travelBar.style.left = `${travelStart}%`;
-                        travelBar.style.width = `${travelWidth}%`;
-                        travelBar.textContent = `Trajet`;
-                        content.appendChild(travelBar);
-                        
-                        // 3. Déchargement
-                        const unloadingBar = document.createElement('div');
-                        unloadingBar.className = 'timeline-bar unloading-bar';
-                        const unloadingStart = (truck.arrivalTimeMinutes - earliestTime) / timeSpan * 100;
-                        const unloadingWidth = truck.unloadingDuration / timeSpan * 100;
-                        unloadingBar.style.left = `${unloadingStart}%`;
-                        unloadingBar.style.width = `${unloadingWidth}%`;
-                        unloadingBar.textContent = `Décharg.`;
-                        content.appendChild(unloadingBar);
-                        
-                        // 4. Trajet retour
-                        const returnBar = document.createElement('div');
-                        returnBar.className = 'timeline-bar return-bar';
-                        const returnStart = (truck.departureTimeMinutes - earliestTime) / timeSpan * 100;
-                        const returnWidth = truck.travelTime / timeSpan * 100;
-                        returnBar.style.left = `${returnStart}%`;
-                        returnBar.style.width = `${returnWidth}%`;
-                        returnBar.textContent = `Retour`;
-                        content.appendChild(returnBar);
-                    });
-                    
-                    timelineRow.appendChild(content);
-                    timeline.appendChild(timelineRow);
-                }
-            });
-            
-            container.appendChild(timeline);
-        }
-        
-        // Fonction pour enregistrer un chantier
-        function saveJob(jobData) {
-            // Vérifier si ce chantier existe déjà
-            const existingIndex = jobs.findIndex(job => job.id === jobData.id);
-            
-            if (existingIndex !== -1) {
-                // Mettre à jour le chantier existant
-                jobs[existingIndex] = jobData;
-            } else {
-                // Ajouter un nouveau chantier
-                jobs.push(jobData);
-            }
-            
-            // Sauvegarder dans le localStorage
-            saveJobs();
-            
-            // Mettre à jour le résumé quotidien
-            updateDailySummary();
-        }
-        
-        // Fonction pour sauvegarder les chantiers dans le localStorage
-        function saveJobs() {
-            localStorage.setItem('cementJobs_current', JSON.stringify(jobs));
-            localStorage.setItem('driverAssignments', JSON.stringify(driverAssignments));
-        }
-        
-        // Fonction pour charger les chantiers
-        function loadJobs() {
-            const savedJobs = JSON.parse(localStorage.getItem('cementJobs_current')) || [];
-            const savedAssignments = JSON.parse(localStorage.getItem('driverAssignments')) || [];
-            
-            // Mettre à jour les variables globales
-            jobs = savedJobs;
-            driverAssignments = savedAssignments;
-            
-            // Effacer le tableau existant
-            const tbody = document.querySelector('#jobsTable tbody');
-            tbody.innerHTML = '';
-            
-            // Ajouter chaque chantier au tableau
-            if (jobs.length > 0) {
-                jobs.forEach(job => {
-                    const newRow = document.createElement('tr');
-                    newRow.setAttribute('data-job-id', job.id);
-                    
-                    newRow.innerHTML = `
-                        <td><input type="text" class="client-name" value="${job.name || ''}" placeholder="Nom du client"></td>
-                        <td><input type="text" class="company-name" value="${job.company || ''}" placeholder="Nom de l'entreprise"></td>
-                        <td><input type="time" class="work-time" value="${job.workTime || ''}"></td>
-                        <td><input type="number" class="meter-needed" min="0" step="0.5" value="${job.meterNeeded || ''}" placeholder="m³"></td>
-                        <td><input type="number" class="travel-time" min="0" value="${job.travelTime || ''}" placeholder="minutes"></td>
-                        <td>
-                            <button class="view-dispatch-btn" onclick="viewDispatch(this)">Voir Dispatch</button>
-                            <button class="delete-btn" onclick="deleteRow(this)">X</button>
-                        </td>
-                    `;
-                    
-                    tbody.appendChild(newRow);
-                });
-            }
-            
-            // Mettre à jour le résumé quotidien
-            updateDailySummary();
-        }
-        
-        // Fonction pour mettre à jour le résumé quotidien
-        function updateDailySummary() {
-            const summaryContainer = document.getElementById('dailySummary');
-            
-            if (jobs.length === 0) {
-                summaryContainer.innerHTML = '<p>Aucun chantier enregistré pour cette journée.</p>';
-                return;
-            }
-            
-            // Calculer le volume total
-            let totalVolume = 0;
-            let totalTrucks = 0;
-            
-            jobs.forEach(job => {
-                const volume = parseFloat(job.meterNeeded) || 0;
-                totalVolume += volume;
-                
-                // Calculer le nombre de camions pour ce chantier
-                let jobTrucks = 0;
-                if (job.calculatedData && job.calculatedData.totalTrucks) {
-                    jobTrucks = job.calculatedData.totalTrucks;
-                } else {
-                    // Approximation si le dispatch n'a pas encore été calculé
-                    jobTrucks = Math.ceil(volume / 8);
-                }
-                totalTrucks += jobTrucks;
-            });
-            
-            // Afficher le résumé
-            summaryContainer.innerHTML = `
-                <p><strong>Nombre de chantiers:</strong> ${jobs.length}</p>
-                <p><strong>Volume total:</strong> ${totalVolume.toFixed(1)} m³</p>
-                <p><strong>Nombre total de camions:</strong> ${totalTrucks}</p>
-            `;
-        }
-        
-        // Utilitaire: Convertir des minutes en chaîne de caractères au format HH:MM
-        function minutesToTimeString(minutes) {
-            const hours = Math.floor(minutes / 60) % 24;
-            const mins = Math.floor(minutes % 60);
-            return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-        }
-        
-        // Utilitaire: Arrondir les minutes aux 15 minutes inférieures
-        function roundDownToQuarterHour(minutes) {
-            return Math.floor(minutes / 15) * 15;
-        }
-    </script>
-</body>
-</html>
